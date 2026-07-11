@@ -1,0 +1,33 @@
+[project]
+name = "unity3-aot-recover"
+version = "0.1.0"
+description = "Recover managed metadata and native method maps from old Unity iOS Mono AOT applications"
+requires-python = ">=3.10"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Hawk" }]
+keywords = ["unity", "mono", "aot", "ios", "macho", "reverse-engineering", "preservation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Disassemblers",
+]
+
+[project.scripts]
+unity3-aot-recover = "aot_recover.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project.urls]
+Repository = "https://github.com/iHawksPro/unity3-ios-aot-recover"
+Issues = "https://github.com/iHawksPro/unity3-ios-aot-recover/issues"
+
+[tool.setuptools.package-data]
+aot_recover = [
+  "resources/MetadataDump/*.cs",
+  "resources/MetadataDump/*.csproj",
+  "resources/ghidra/*.java",
+  "resources/ghidra/*.py",
+]

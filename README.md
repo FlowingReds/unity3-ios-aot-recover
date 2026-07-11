@@ -1,0 +1,116 @@
+# Unity 3 iOS Mono AOT Recover
+
+[![CI](https://github.com/iHawksPro/unity3-ios-aot-recover/actions/workflows/ci.yml/badge.svg)](https://github.com/iHawksPro/unity3-ios-aot-recover/actions/workflows/ci.yml)
+
+Recover managed structure and deterministic native-method maps from pre-IL2CPP Unity iOS applications.
+
+Old Unity iOS builds commonly retain .NET metadata in `Data/Managed`, replace CIL implementations with `ret` stubs, and place the real code in statically linked Mono AOT modules inside the Mach-O executable. This tool joins those pieces back together.
+
+## Capabilities
+
+- extracts application/build identity, Unity version, and managed assemblies from an IPA;
+- exports C# type/signature skeletons with ILSpy;
+- records exact MethodDef tokens and stripped-body coverage with Mono.Cecil;
+- parses thin and fat 32-bit ARM Mach-O executables without third-party Python packages;
+- detects `LC_ENCRYPTION_INFO` and refuses to describe encrypted bytes as recovered code;
+- discovers legacy `_mono_aot_module_*_info` registrations and static global tables;
+- maps ordinary managed methods using `AOT index = MethodDef RID - 1` when a same-build decrypted executable is supplied;
+- emits JSON/CSV method maps plus ARM/Thumb-aware Ghidra and radare2 labels;
+- automates per-method Ghidra C-like pseudocode export.
+
+It does **not** bypass FairPlay or download application binaries. Use it only with software you own or are authorized to inspect.
+
+## Requirements
+
+- Python 3.10+
+- .NET 10 SDK/runtime for the metadata helper
+- [`ilspycmd`](https://github.com/icsharpcode/ILSpy) for C# skeletons
+- [Ghidra](https://github.com/NationalSecurityAgency/ghidra) for native pseudocode
+
+The Python parser itself uses only the standard library.
+
+## Install
+
+```bash
+git clone https://github.com/iHawksPro/unity3-ios-aot-recover.git
+cd unity3-ios-aot-recover
+python3 -m pip install .
+```
+
+You can also run `python3 aot-recover.py` directly from a checkout.
+
+## Quick start
+
+```bash
+unity3-aot-recover /path/to/game.ipa -o /path/to/recovered/game
+```
+
+If you have an authorized decrypted executable from the **exact same build**:
+
+```bash
+unity3-aot-recover /path/to/game.ipa \
+  -o /path/to/recovered/game \
+  --arch armv7 \
+  --binary /path/to/decrypted/main-executable
+```
+
+Use `--no-decompile` when ILSpy is unavailable. See [architecture and method mapping](docs/architecture.md) for the format details.
+
+## Output
+
+```text
+recovered/game/
+├── REPORT.md
+├── manifest.json
+├── managed/
+├── metadata/
+├── csharp-skeletons/
+└── native/
+    └── armv7/
+        ├── main-executable
+        ├── aot-globals/
+        ├── method-maps/                 # after a decrypted run
+        └── labels/
+            ├── ghidra-method-map.tsv
+            └── radare2-labels.r2
+```
+
+## Ghidra export
+
+After a successful decrypted run:
+
+```bash
+/path/to/ghidra/support/analyzeHeadless /tmp/ghidra-project unity3-aot \
+  -import "$ARCH_DIR/main-executable" \
+  -scriptPath "$PWD/aot_recover/resources/ghidra" \
+  -postScript ApplyAotMethodMap.java "$ARCH_DIR/labels/ghidra-method-map.tsv" \
+  -postScript ExportAotPseudoC.java "$ARCH_DIR/pseudocode"
+```
+
+The Java importer works in ordinary headless Ghidra. A Python importer is also included for PyGhidra-enabled sessions.
+
+For an installed package, locate those scripts with:
+
+```bash
+unity3-aot-recover --print-resource-dir
+```
+
+## Validated case studies
+
+- [Call of Mini Zombies 2.0.2](docs/case-studies/call-of-mini-zombies-2.0.2.md)
+- [Call of Mini Dino Hunter Lite 1.0.1](docs/case-studies/call-of-mini-dino-hunter-lite-1.0.1.md)
+
+These case studies contain hashes and structural findings only. No IPAs, executable code, assets, managed binaries, or reconstructed third-party source are included.
+
+## Development
+
+```bash
+python3 -m unittest discover -s tests -v
+dotnet build aot_recover/resources/MetadataDump/MetadataDump.csproj --configuration Release --nologo
+```
+
+The synthetic test fixture covers Mach-O parsing, encryption commands, static AOT globals, Thumb addresses, MethodDef mapping, and function-size boundaries. The Ghidra Java importer and pseudocode exporter were also validated headlessly against the generated fixture.
+
+## License
+
+MIT. Third-party applications and their contents remain subject to their respective owners' rights.
