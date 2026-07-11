@@ -39,7 +39,7 @@ Reference implementation evidence:
 
 An App Store IPA may contain `LC_ENCRYPTION_INFO` with a nonzero `cryptid`. The load command identifies the file range protected by FairPlay. Module descriptor pointers in `__DATA` and dynamic symbols in `__LINKEDIT` may remain readable while method code, names, and address tables in `__TEXT` are encrypted.
 
-The tool reports those plaintext facts but does not attempt to interpret the protected range. A same-build executable already decrypted through an authorized workflow can be passed with `--binary`; some dumpers leave `cryptid` unchanged, so table readability is validated independently of that flag.
+The tool reports those plaintext facts but does not attempt to interpret the protected range. A same-build executable already decrypted through an authorized workflow can be passed with `--binary`. Before mapping, the tool requires its CPU subtype, `LC_UUID`, segment layout, and encryption range to match an original IPA slice. Some dumpers leave `cryptid` unchanged, so table readability is validated independently of that flag.
 
 ## Accuracy limits
 

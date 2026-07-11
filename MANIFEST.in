@@ -1,0 +1,11 @@
+include CONTRIBUTING.md
+include LEGAL.md
+include SECURITY.md
+recursive-include docs *.md
+recursive-include tests *.py *.cs *.csproj
+prune tests/fixtures/donor-reference/bin
+prune tests/fixtures/donor-reference/obj
+prune tests/fixtures/donor-wrong-scope/bin
+prune tests/fixtures/donor-wrong-scope/obj
+prune tests/fixtures/donor-target/bin
+prune tests/fixtures/donor-target/obj

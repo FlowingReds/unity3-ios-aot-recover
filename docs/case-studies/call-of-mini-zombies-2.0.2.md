@@ -21,4 +21,16 @@ Seven Mono AOT modules are registered in each architecture. `Assembly_CSharp` re
 
 Both slices use `LC_ENCRYPTION_INFO cryptid=1`, and the protected range covers the executable `__TEXT` content needed for method recovery. Module registrations and managed metadata were recovered, but native logic requires a same-build decrypted executable.
 
+## Related-build donor experiment
+
+A separately held Call of Mini Zombies 4.3.4 managed assembly (SHA-256 `13035bfa3c02cf307c06dff63549581ccf186015030d8c4bec4802966792f779`) was indexed as a cross-version reference:
+
+| Target assembly | Normalized identities | Donor bodies beyond `ret` | Tier A | Tier B | Tier C |
+|---|---:|---:|---:|---:|---:|
+| Assembly-CSharp-firstpass | 685 | 623 | 505 | 99 | 19 |
+| Assembly-CSharp | 1,866 | 1,593 | 493 | 270 | 830 |
+| **Total** | **2,551** | **2,216** | **998** | **369** | **849** |
+
+These counts identify candidates for porting; they do not turn 4.3.4 implementations into authoritative 2.0.2 source. The two builds still need native comparison before any method can be promoted beyond cross-version evidence.
+
 This repository contains no game binaries, managed assemblies, assets, or reconstructed source.

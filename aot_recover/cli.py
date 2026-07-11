@@ -4,6 +4,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
@@ -21,6 +22,7 @@ from .mono_aot import AotModule, build_method_map, parse_aot_modules, sanitize_m
 
 RESOURCE_ROOT = Path(__file__).resolve().parent / "resources"
 METADATA_PROJECT = RESOURCE_ROOT / "MetadataDump" / "MetadataDump.csproj"
+DONOR_INDEX_PROJECT = RESOURCE_ROOT / "DonorIndex" / "DonorIndex.csproj"
 GAME_ASSEMBLY_PATTERN = re.compile(r"^Assembly-CSharp(?:-firstpass)?\.dll$", re.IGNORECASE)
 UNITY_VERSION_PATTERN = re.compile(rb"\b\d+\.\d+\.\d+[abfp]\d+\b")
 
@@ -43,43 +45,76 @@ def _find_ilspy(explicit: str | None) -> str | None:
     return next((candidate for candidate in candidates if candidate and Path(candidate).is_file()), None)
 
 
-def _metadata_dump_dll() -> Path:
+def _helper_dll(project: Path, assembly_name: str) -> Path:
     def target_version(path: Path) -> tuple[int, ...]:
         match = re.fullmatch(r"net(\d+(?:\.\d+)*)", path.parent.name)
         return tuple(int(part) for part in match.group(1).split(".")) if match else (0,)
 
-    candidates = sorted(
-        (METADATA_PROJECT.parent / "bin" / "Release").glob("net*/MetadataDump.dll"),
-        key=target_version,
-        reverse=True,
+    sources = [project, *sorted(project.parent.glob("*.cs"))]
+    fingerprint = hashlib.sha256()
+    for source in sources:
+        fingerprint.update(source.name.encode("utf-8"))
+        fingerprint.update(b"\0")
+        fingerprint.update(source.read_bytes())
+    cache_root = Path(
+        os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))
+    ).expanduser().resolve()
+    cache_base = (
+        cache_root
+        / "unity3-aot-recover"
+        / __version__
+        / assembly_name
+        / fingerprint.hexdigest()[:16]
     )
-    if candidates:
-        return candidates[0]
+    cached_output = cache_base / f"{assembly_name}.dll"
+
+    def local_outputs() -> list[Path]:
+        return sorted(
+            (project.parent / "bin" / "Release").glob(f"net*/{assembly_name}.dll"),
+            key=target_version,
+            reverse=True,
+        )
+
+    source_mtime = max(source.stat().st_mtime for source in sources)
+    fresh_local = [
+        candidate
+        for candidate in local_outputs()
+        if candidate.stat().st_mtime >= source_mtime
+    ]
+    if fresh_local:
+        return fresh_local[0]
+    if cached_output.is_file():
+        return cached_output
     if shutil.which("dotnet") is None:
-        raise RecoveryError("dotnet is required to build the metadata helper")
+        raise RecoveryError(f"dotnet is required to build the {assembly_name} helper")
+    cache_base.mkdir(parents=True, exist_ok=True)
     command = [
         "dotnet",
         "build",
-        str(METADATA_PROJECT),
+        str(project),
         "--configuration",
         "Release",
         "--nologo",
         "--verbosity",
         "minimal",
+        "--output",
+        str(cache_base),
+        f"--property:BaseIntermediateOutputPath={cache_base / 'obj'}/",
     ]
     completed = subprocess.run(command, text=True, capture_output=True)
     if completed.returncode != 0:
-        raise RecoveryError(
-            "could not build MetadataDump\n" + completed.stdout + completed.stderr
-        )
-    candidates = sorted(
-        (METADATA_PROJECT.parent / "bin" / "Release").glob("net*/MetadataDump.dll"),
-        key=target_version,
-        reverse=True,
-    )
-    if not candidates:
-        raise RecoveryError("MetadataDump built successfully but its output DLL was not found")
-    return candidates[0]
+        raise RecoveryError(f"could not build {assembly_name}\n" + completed.stdout + completed.stderr)
+    if not cached_output.is_file():
+        raise RecoveryError(f"{assembly_name} built successfully but its output DLL was not found")
+    return cached_output
+
+
+def _metadata_dump_dll() -> Path:
+    return _helper_dll(METADATA_PROJECT, "MetadataDump")
+
+
+def _donor_index_dll() -> Path:
+    return _helper_dll(DONOR_INDEX_PROJECT, "DonorIndex")
 
 
 def _dump_metadata(assembly: Path) -> dict[str, Any]:
@@ -95,6 +130,49 @@ def _dump_metadata(assembly: Path) -> dict[str, Any]:
         return json.loads(completed.stdout)
     except json.JSONDecodeError as error:
         raise RecoveryError(f"MetadataDump returned invalid JSON for {assembly.name}: {error}") from error
+
+
+def _resolve_reference_managed(inputs: list[str] | None) -> list[Path]:
+    resolved: list[Path] = []
+    seen: set[Path] = set()
+    for raw in inputs or []:
+        path = Path(raw).expanduser().resolve()
+        if path.is_file():
+            if path.suffix.lower() != ".dll":
+                raise RecoveryError(f"managed reference is not a DLL: {path}")
+            candidates = [path]
+        elif path.is_dir():
+            candidates = sorted(
+                (item for item in path.iterdir() if item.is_file() and GAME_ASSEMBLY_PATTERN.match(item.name)),
+                key=lambda item: item.name.lower(),
+            )
+            if not candidates:
+                raise RecoveryError(f"managed reference directory has no Assembly-CSharp DLLs: {path}")
+        else:
+            raise RecoveryError(f"managed reference not found: {path}")
+        for candidate in candidates:
+            candidate = candidate.resolve()
+            if candidate not in seen:
+                seen.add(candidate)
+                resolved.append(candidate)
+    return resolved
+
+
+def _run_donor_index(targets: list[Path], donors: list[Path]) -> dict[str, Any]:
+    helper = _donor_index_dll()
+    command = ["dotnet", str(helper)]
+    for target in targets:
+        command.extend(["--target", str(target)])
+    for donor in donors:
+        command.extend(["--donor", str(donor)])
+    completed = subprocess.run(command, text=True, capture_output=True)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RecoveryError(f"cross-version donor indexing failed: {detail}")
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RecoveryError(f"DonorIndex returned invalid JSON: {error}") from error
 
 
 def _decompile_assembly(ilspy: str, assembly: Path, managed_directory: Path, output: Path) -> dict[str, Any]:
@@ -217,6 +295,75 @@ def _select_slices(slices: list[MachOSlice], architecture: str | None) -> list[M
         available = ", ".join(item.architecture for item in slices)
         raise RecoveryError(f"architecture {architecture!r} was not found; available: {available}")
     return selected
+
+
+def _verify_binary_override(ipa_binary: bytes, override_binary: bytes) -> dict[str, Any]:
+    try:
+        original_slices = parse_macho(ipa_binary)
+        override_slices = parse_macho(override_binary)
+    except MachOError as error:
+        raise RecoveryError(f"could not verify decrypted executable identity: {error}") from error
+
+    originals = {(item.cpu_type, item.cpu_subtype): item for item in original_slices}
+    verified: list[dict[str, Any]] = []
+    for candidate in override_slices:
+        key = (candidate.cpu_type, candidate.cpu_subtype)
+        original = originals.get(key)
+        if original is None:
+            raise RecoveryError(
+                f"decrypted executable architecture {candidate.architecture} is absent from the IPA"
+            )
+        if original.uuid is None or candidate.uuid is None:
+            raise RecoveryError(
+                f"cannot verify {candidate.architecture} as the same build because LC_UUID is missing"
+            )
+        if original.uuid != candidate.uuid:
+            raise RecoveryError(
+                f"decrypted executable UUID mismatch for {candidate.architecture}: "
+                f"expected {original.uuid}, got {candidate.uuid}"
+            )
+        original_layout = [
+            (
+                segment.name,
+                segment.vm_address,
+                segment.vm_size,
+                segment.file_offset,
+                segment.file_size,
+            )
+            for segment in original.segments
+        ]
+        candidate_layout = [
+            (
+                segment.name,
+                segment.vm_address,
+                segment.vm_size,
+                segment.file_offset,
+                segment.file_size,
+            )
+            for segment in candidate.segments
+        ]
+        if original_layout != candidate_layout:
+            raise RecoveryError(
+                f"decrypted executable segment layout mismatch for {candidate.architecture}"
+            )
+        original_encryption = [(item.offset, item.size) for item in original.encryption]
+        candidate_encryption = [(item.offset, item.size) for item in candidate.encryption]
+        if original_encryption != candidate_encryption:
+            raise RecoveryError(
+                f"decrypted executable encryption-range mismatch for {candidate.architecture}"
+            )
+        verified.append(
+            {
+                "architecture": candidate.architecture,
+                "uuid": candidate.uuid,
+                "verification": "LC_UUID, CPU subtype, segment layout, and encryption range",
+            }
+        )
+    return {
+        "verified": True,
+        "method": "mach-o-build-identity",
+        "architectures": verified,
+    }
 
 
 def _write_global_inventory(path: Path, module: AotModule) -> None:
@@ -380,10 +527,74 @@ def _decompile_game_assemblies(
     return results, None
 
 
+def _write_donor_index(output: Path, report: dict[str, Any]) -> None:
+    directory = output / "reference-donor"
+    _write_json(directory / "index.json", report)
+    fields = [
+        "targetAssembly",
+        "targetAssemblySha256",
+        "targetToken",
+        "targetRid",
+        "targetDeclaringType",
+        "targetFullName",
+        "targetRetOnlyBody",
+        "donorAssembly",
+        "donorAssemblySha256",
+        "donorToken",
+        "donorRid",
+        "donorDeclaringType",
+        "donorFullName",
+        "donorHasBodyBeyondRetStub",
+        "donorCodeSize",
+        "donorInstructionCount",
+        "sameFieldShape",
+        "sameMethodShape",
+        "confidenceTier",
+        "ambiguousDonorCount",
+    ]
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "matches.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(report.get("matches", []))
+
+
+def _decompile_reference_assemblies(
+    donors: list[Path], output: Path, explicit_ilspy: str | None
+) -> tuple[list[dict[str, Any]], str | None]:
+    ilspy = _find_ilspy(explicit_ilspy)
+    if ilspy is None:
+        return [], "ilspycmd was not found; the donor index was still recovered"
+    results: list[dict[str, Any]] = []
+    log_directory = output / "logs"
+    log_directory.mkdir(parents=True, exist_ok=True)
+    for donor in donors:
+        digest = _sha256(donor.read_bytes())
+        identity = f"{donor.stem}-{digest[:8]}"
+        destination = output / "reference-donor" / "csharp" / identity
+        result = _decompile_assembly(ilspy, donor, donor.parent, destination)
+        (log_directory / f"ilspy-donor-{identity}.stdout.log").write_text(
+            result["stdout"], encoding="utf-8"
+        )
+        (log_directory / f"ilspy-donor-{identity}.stderr.log").write_text(
+            result["stderr"], encoding="utf-8"
+        )
+        results.append(
+            {
+                "assembly": donor.name,
+                "sha256": digest,
+                "exit_code": result["exit_code"],
+                "output": str(destination),
+            }
+        )
+    return results, None
+
+
 def _markdown_report(manifest: dict[str, Any]) -> str:
     app = manifest["app"]
     architectures = manifest["architectures"]
     metadata = manifest["game_metadata"]
+    donor = manifest.get("reference_donor")
     mapped = sum(
         mapping.get("mapped_method_count", 0)
         for architecture in architectures
@@ -453,9 +664,69 @@ def _markdown_report(manifest: dict[str, Any]) -> str:
         [
             "",
             "The DLL bodies are Unity's AOT reference stubs; fields, types, inheritance, signatures, tokens, "
-            "P/Invoke declarations, and serialized class structure remain useful and are exported under "
-            "`csharp-skeletons/` and `metadata/`.",
+            "P/Invoke declarations, and serialized class structure remain useful and are exported under `metadata/`.",
             "",
+        ]
+    )
+    if any(item.get("exit_code") == 0 for item in manifest.get("decompilation", [])):
+        lines.extend(
+            [
+                "ILSpy exported C# skeletons for the successfully decompiled assemblies under `csharp-skeletons/`.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "C# skeletons were not produced in this run; see the decompilation fields in `manifest.json`.",
+                "",
+            ]
+        )
+    if donor:
+        lines.extend(
+            [
+                "## Cross-version donor index",
+                "",
+                "A separately supplied managed build has normalized method matches with CIL beyond the target's "
+                "single-`ret` stub pattern. These are "
+                "**porting references, not recovered bodies from this app build**. Even Tier A cannot prove that "
+                "behavior stayed identical between versions.",
+                "",
+                "| Target assembly | Methods | Normalized identities | Donor bodies beyond `ret` stub | Tier A | Tier B | Tier C |",
+                "|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for target in donor.get("targets", []):
+            lines.append(
+                "| {assembly} | {methods:,} | {exact:,} | {bodies:,} | {tier_a:,} | {tier_b:,} | {tier_c:,} |".format(
+                    assembly=target["assembly"],
+                    methods=target["targetMethodCount"],
+                    exact=target["exactSignatureMatches"],
+                    bodies=target["donorBodiesBeyondRetStub"],
+                    tier_a=target["tierA"],
+                    tier_b=target["tierB"],
+                    tier_c=target["tierC"],
+                )
+            )
+        lines.extend(
+            [
+                "",
+                "Tier A matches normalized method identity plus declaring type field and method surfaces; Tier B "
+                "matches identity and the field surface; Tier C matches normalized method identity only. Ambiguity and "
+                "both assembly hashes are retained per method in `reference-donor/index.json` and `matches.csv`.",
+                "",
+            ]
+        )
+        if any(item.get("exit_code") == 0 for item in manifest.get("reference_decompilation", [])):
+            lines.extend(
+                [
+                    "ILSpy exported the supplied donor C# under `reference-donor/csharp/`. Use the CSV to select "
+                    "candidate methods by target token and confidence tier.",
+                    "",
+                ]
+            )
+    lines.extend(
+        [
             "## Native recovery artifacts",
             "",
             "Each architecture directory contains a thin Mach-O slice, AOT global-table inventories, and—when "
@@ -496,13 +767,21 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
     output.mkdir(parents=True, exist_ok=True)
 
     app, ipa_executable, managed_paths = _extract_ipa(ipa, output)
+    game_assemblies = [path for path in managed_paths if GAME_ASSEMBLY_PATTERN.match(path.name)]
+    reference_paths = _resolve_reference_managed(args.reference_managed)
     binary_path = Path(args.binary).expanduser().resolve() if args.binary else None
     if binary_path is not None and not binary_path.is_file():
         raise RecoveryError(f"decrypted executable not found: {binary_path}")
     executable_data = binary_path.read_bytes() if binary_path else ipa_executable
+    binary_verification = (
+        _verify_binary_override(ipa_executable, executable_data)
+        if binary_path
+        else {"verified": True, "method": "embedded IPA executable", "architectures": []}
+    )
     app["analysis_binary"] = str(binary_path) if binary_path else app["executable_member"]
     app["analysis_binary_sha256"] = _sha256(executable_data)
     app["analysis_binary_is_override"] = binary_path is not None
+    app["analysis_binary_verification"] = binary_verification
 
     metadata, metadata_errors = _game_metadata(managed_paths, output)
     metadata_by_module = {
@@ -514,6 +793,24 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
         decompilation, decompilation_error = _decompile_game_assemblies(
             managed_paths, output, args.ilspycmd
         )
+
+    reference_donor: dict[str, Any] | None = None
+    reference_decompilation: list[dict[str, Any]] = []
+    reference_decompilation_error: str | None = None
+    if reference_paths:
+        donor_report = _run_donor_index(game_assemblies, reference_paths)
+        _write_donor_index(output, donor_report)
+        reference_donor = {
+            key: value for key, value in donor_report.items() if key != "matches"
+        }
+        reference_donor["index"] = "reference-donor/index.json"
+        reference_donor["matchesCsv"] = "reference-donor/matches.csv"
+        if args.no_decompile:
+            reference_decompilation_error = "skipped by --no-decompile"
+        else:
+            reference_decompilation, reference_decompilation_error = _decompile_reference_assemblies(
+                reference_paths, output, args.ilspycmd
+            )
 
     try:
         slices = _select_slices(parse_macho(executable_data), args.arch)
@@ -576,6 +873,9 @@ def recover(args: argparse.Namespace) -> dict[str, Any]:
         "metadata_errors": metadata_errors,
         "decompilation": decompilation,
         "decompilation_error": decompilation_error,
+        "reference_donor": reference_donor,
+        "reference_decompilation": reference_decompilation,
+        "reference_decompilation_error": reference_decompilation_error,
         "architectures": architecture_manifests,
     }
     mapped_count = sum(item["mapped_method_count"] for item in architecture_manifests)
@@ -606,6 +906,8 @@ def build_parser() -> argparse.ArgumentParser:
               python3 aot-recover.py game.ipa -o recovered/game
               python3 aot-recover.py game.ipa -o recovered/game --arch armv7 \\
                   --binary /path/to/decrypted/app
+              python3 aot-recover.py game.ipa -o recovered/game \\
+                  --reference-managed /path/to/later-build/Data/Managed
             """
         ),
     )
@@ -613,15 +915,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-o", "--output", help="artifact directory")
     parser.add_argument(
         "--binary",
-        help="authorized decrypted main executable from the exact same build",
+        help="authorized decrypted executable whose Mach-O build identity matches the IPA",
     )
     parser.add_argument("--arch", help="analyze only this architecture (for example armv7)")
     parser.add_argument("--ilspycmd", help="path to ilspycmd")
     parser.add_argument("--no-decompile", action="store_true", help="skip ILSpy C# skeleton export")
     parser.add_argument(
+        "--reference-managed",
+        action="append",
+        metavar="DLL_OR_DIRECTORY",
+        help=(
+            "index matching method bodies from another managed build as non-authoritative porting "
+            "references; may be repeated"
+        ),
+    )
+    parser.add_argument(
         "--print-resource-dir",
         action="store_true",
-        help="print the installed MetadataDump/Ghidra resource directory and exit",
+        help="print the installed helper/Ghidra resource directory and exit",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser

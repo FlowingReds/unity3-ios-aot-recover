@@ -8,3 +8,7 @@ updates:
     directory: "/aot_recover/resources/MetadataDump"
     schedule:
       interval: monthly
+  - package-ecosystem: nuget
+    directory: "/aot_recover/resources/DonorIndex"
+    schedule:
+      interval: monthly

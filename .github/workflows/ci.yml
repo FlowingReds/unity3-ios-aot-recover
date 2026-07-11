@@ -28,12 +28,93 @@ jobs:
         run: python aot-recover.py --help
 
   metadata-helper:
-    name: .NET metadata helper
+    name: .NET helpers
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
       - name: Build
-        run: dotnet build aot_recover/resources/MetadataDump/MetadataDump.csproj --configuration Release --nologo
+        run: |
+          dotnet build aot_recover/resources/MetadataDump/MetadataDump.csproj --configuration Release --nologo
+          dotnet build aot_recover/resources/DonorIndex/DonorIndex.csproj --configuration Release --nologo
+      - name: Validate donor confidence tiers
+        run: |
+          dotnet build tests/fixtures/donor-target/DonorTarget.csproj --configuration Release --nologo
+          dotnet build tests/fixtures/donor-reference/DonorReference.csproj --configuration Release --nologo
+          dotnet build tests/fixtures/donor-wrong-scope/DonorWrongScope.csproj --configuration Release --nologo
+          python - <<'PY'
+          import json
+          import subprocess
+
+          report = json.loads(subprocess.check_output([
+              "dotnet", "aot_recover/resources/DonorIndex/bin/Release/net10.0/DonorIndex.dll",
+              "--target", "tests/fixtures/donor-target/bin/Release/net10.0/Fixture.Game.dll",
+              "--donor", "tests/fixtures/donor-reference/bin/Release/net10.0/Fixture.Game.dll",
+          ], text=True))
+          actual = tuple(report[key] for key in (
+              "exactSignatureMatches", "donorBodiesBeyondRetStub", "tierA", "tierB", "tierC"
+          ))
+          assert actual == (6, 6, 2, 2, 2), actual
+          wrong_scope = json.loads(subprocess.check_output([
+              "dotnet", "aot_recover/resources/DonorIndex/bin/Release/net10.0/DonorIndex.dll",
+              "--target", "tests/fixtures/donor-target/bin/Release/net10.0/Fixture.Game.dll",
+              "--donor", "tests/fixtures/donor-wrong-scope/bin/Release/net10.0/Fixture.Gamer.dll",
+          ], text=True))
+          assert wrong_scope["exactSignatureMatches"] == 0, wrong_scope["exactSignatureMatches"]
+          PY
+
+  installed-package:
+    name: Installed package and cached helpers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build synthetic managed fixtures
+        run: |
+          dotnet build tests/fixtures/donor-target/DonorTarget.csproj --configuration Release --nologo
+          dotnet build tests/fixtures/donor-reference/DonorReference.csproj --configuration Release --nologo
+      - name: Build wheel and install
+        run: python -m pip install .
+      - name: Run installed helpers outside checkout
+        working-directory: /tmp
+        env:
+          TARGET_DLL: ${{ github.workspace }}/tests/fixtures/donor-target/bin/Release/net10.0/Fixture.Game.dll
+          DONOR_DLL: ${{ github.workspace }}/tests/fixtures/donor-reference/bin/Release/net10.0/Fixture.Game.dll
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          from aot_recover.cli import RESOURCE_ROOT, _donor_index_dll, _metadata_dump_dll
+
+          assert (RESOURCE_ROOT / "MetadataDump" / "MetadataDump.csproj").is_file()
+          assert (RESOURCE_ROOT / "DonorIndex" / "DonorIndex.csproj").is_file()
+          assert (RESOURCE_ROOT / "ghidra" / "ApplyAotMethodMap.java").is_file()
+          target = os.environ["TARGET_DLL"]
+          donor = os.environ["DONOR_DLL"]
+          metadata_helper = _metadata_dump_dll()
+          donor_helper = _donor_index_dll()
+          assert metadata_helper.is_file() and donor_helper.is_file()
+          metadata = json.loads(subprocess.check_output(
+              ["dotnet", str(metadata_helper), target], text=True
+          ))
+          assert metadata["methodCount"] > 0
+          report = json.loads(subprocess.check_output([
+              "dotnet", str(donor_helper), "--target", target, "--donor", donor
+          ], text=True))
+          actual = tuple(report[key] for key in (
+              "exactSignatureMatches", "donorBodiesBeyondRetStub", "tierA", "tierB", "tierC"
+          ))
+          assert actual == (6, 6, 2, 2, 2), actual
+          PY

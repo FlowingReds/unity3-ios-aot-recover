@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from aot_recover.macho import parse_macho
 from aot_recover.mono_aot import build_method_map, parse_aot_modules
+from aot_recover.cli import RecoveryError, _verify_binary_override
 
 
 def uleb(value: int) -> bytes:
@@ -23,7 +24,7 @@ def uleb(value: int) -> bytes:
             return bytes(result)
 
 
-def make_fixture(crypt_id: int = 0) -> bytes:
+def make_fixture(crypt_id: int = 0, uuid: bytes = bytes(range(16))) -> bytes:
     data = bytearray(0x2000)
     commands = []
 
@@ -48,6 +49,7 @@ def make_fixture(crypt_id: int = 0) -> bytes:
     commands.append(struct.pack("<IIIIII", 2, 24, 0x1E00, 1, 0x1E0C, 128))
     commands.append(struct.pack("<IIII", 0x26, 16, 0x1F00, 16))
     commands.append(struct.pack("<IIIII", 0x21, 20, 0x400, 0x100, crypt_id))
+    commands.append(struct.pack("<II16s", 0x1B, 24, uuid))
     command_blob = b"".join(commands)
     struct.pack_into("<IiiIIII", data, 0, 0xFEEDFACE, 12, 9, 2, len(commands), len(command_blob), 0)
     data[28 : 28 + len(command_blob)] = command_blob
@@ -95,6 +97,7 @@ class MachOAotTests(unittest.TestCase):
     def test_parses_legacy_module_and_maps_method_tokens(self) -> None:
         image = parse_macho(make_fixture())[0]
         self.assertEqual("armv7", image.architecture)
+        self.assertEqual("00010203-0405-0607-0809-0a0b0c0d0e0f", image.uuid)
         self.assertFalse(image.encrypted)
         self.assertEqual([0x1500, 0x1520, 0x1540], image.function_starts)
         modules = parse_aot_modules(image)
@@ -120,6 +123,15 @@ class MachOAotTests(unittest.TestCase):
         self.assertTrue(image.encrypted)
         self.assertTrue(image.is_offset_encrypted(0x450))
         self.assertFalse(image.is_offset_encrypted(0x350))
+
+    def test_verifies_decrypted_override_build_identity(self) -> None:
+        verification = _verify_binary_override(make_fixture(crypt_id=1), make_fixture(crypt_id=0))
+        self.assertTrue(verification["verified"])
+        self.assertEqual("mach-o-build-identity", verification["method"])
+
+    def test_rejects_decrypted_override_with_different_uuid(self) -> None:
+        with self.assertRaisesRegex(RecoveryError, "UUID mismatch"):
+            _verify_binary_override(make_fixture(), make_fixture(uuid=b"\xff" * 16))
 
 
 if __name__ == "__main__":

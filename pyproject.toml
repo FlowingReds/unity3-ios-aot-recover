@@ -28,6 +28,8 @@ Issues = "https://github.com/iHawksPro/unity3-ios-aot-recover/issues"
 aot_recover = [
   "resources/MetadataDump/*.cs",
   "resources/MetadataDump/*.csproj",
+  "resources/DonorIndex/*.cs",
+  "resources/DonorIndex/*.csproj",
   "resources/ghidra/*.java",
   "resources/ghidra/*.py",
 ]
