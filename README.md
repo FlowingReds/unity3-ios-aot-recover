@@ -83,6 +83,10 @@ or establish that code from another build is the target's original logic. See
 [donor-backed native porting](docs/native-porting.md) for the provenance model,
 limitations, and command examples.
 
+The current machine-local continuation state for the two validated case-study
+ports is recorded in [the workspace handoff](WORKSPACE_HANDOFF.md). It contains
+paths and hashes only; third-party game content and players are not committed.
+
 ## Output
 
 ```text
