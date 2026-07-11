@@ -70,6 +70,19 @@ unity3-aot-recover /path/to/game.ipa \
 
 You may repeat `--reference-managed` or pass a DLL directly. These bodies are never labeled as exact recovery: [the donor-index model](https://github.com/iHawksPro/unity3-ios-aot-recover/blob/main/docs/donor-index.md) records what matched and how strong the structural evidence is.
 
+## Reconstructing a buildable Unity project
+
+The repository also includes small helpers for assembling an authorized,
+donor-backed Unity project from locally recovered material. They sanitize
+stripped decompiler stubs, overlay matching donor source without replacing
+target `.meta` files, copy explicitly separated donor-only dependencies, and
+modernize selected Unity 3 APIs for Unity 2017.
+
+These helpers do not decrypt FairPlay, translate the original ARM executable,
+or establish that code from another build is the target's original logic. See
+[donor-backed native porting](docs/native-porting.md) for the provenance model,
+limitations, and command examples.
+
 ## Output
 
 ```text
