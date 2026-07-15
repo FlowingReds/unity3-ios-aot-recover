@@ -70,6 +70,33 @@ unity3-aot-recover /path/to/game.ipa \
 
 You may repeat `--reference-managed` or pass a DLL directly. These bodies are never labeled as exact recovery: [the donor-index model](https://github.com/iHawksPro/unity3-ios-aot-recover/blob/main/docs/donor-index.md) records what matched and how strong the structural evidence is.
 
+## Desktop GUI
+
+If you would rather not use the terminal, run the graphical front end:
+
+```bash
+unity3-aot-recover-gui
+```
+
+or, from a checkout, `python3 aot-recover-gui.py`. It starts a local web
+interface on `127.0.0.1` (localhost only) and opens it in your browser. Pick the
+IPA and output folder with native **Browse…** dialogs, set the same options
+available on the command line (decrypted binary, architecture, donor references,
+skip-decompile), press **Recover**, and open the output folder or `REPORT.md`
+when it finishes. Missing `.NET`/`ilspycmd` prerequisites are flagged in the
+window. The GUI uses only the Python standard library (`http.server` plus
+`tkinter` for the file dialogs); no extra packages are installed.
+
+## Windows
+
+The tool is pure standard-library Python and runs on Windows with a stock
+CPython install — no compiler needed. Install the same way (`pip install .`) and
+use either `unity3-aot-recover` or `unity3-aot-recover-gui`. The managed-analysis
+helpers still need the [.NET SDK](https://dotnet.microsoft.com/download) and,
+for C# skeletons, `ilspycmd` (`dotnet tool install -g ilspycmd`); both are found
+automatically on `PATH`. The bundled `tkinter` dialogs ship with the official
+Windows CPython installer.
+
 ## Reconstructing a buildable Unity project
 
 The repository also includes small helpers for assembling an authorized,

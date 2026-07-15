@@ -41,7 +41,12 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def _find_ilspy(explicit: str | None) -> str | None:
-    candidates = [explicit, shutil.which("ilspycmd"), str(Path.home() / ".dotnet" / "tools" / "ilspycmd")]
+    dotnet_tools = Path.home() / ".dotnet" / "tools"
+    candidates = [
+        explicit,
+        shutil.which("ilspycmd"),
+        str(dotnet_tools / ("ilspycmd.exe" if sys.platform == "win32" else "ilspycmd")),
+    ]
     return next((candidate for candidate in candidates if candidate and Path(candidate).is_file()), None)
 
 

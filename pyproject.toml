@@ -16,6 +16,9 @@ classifiers = [
 [project.scripts]
 unity3-aot-recover = "aot_recover.cli:main"
 
+[project.gui-scripts]
+unity3-aot-recover-gui = "aot_recover.gui_server:main"
+
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
@@ -26,6 +29,7 @@ Issues = "https://github.com/iHawksPro/unity3-ios-aot-recover/issues"
 
 [tool.setuptools.package-data]
 aot_recover = [
+  "gui.html",
   "resources/MetadataDump/*.cs",
   "resources/MetadataDump/*.csproj",
   "resources/DonorIndex/*.cs",
