@@ -1,0 +1,49 @@
+name: Release Windows build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip pyinstaller
+
+      - name: Build GUI executable
+        run: >
+          pyinstaller --onefile --noconsole
+          --name unity3-aot-recover-gui
+          --add-data "aot_recover/resources;aot_recover/resources"
+          aot-recover-gui.py
+
+      - name: Build CLI executable
+        run: >
+          pyinstaller --onefile --console
+          --name unity3-aot-recover
+          --add-data "aot_recover/resources;aot_recover/resources"
+          aot-recover.py
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-executables
+          path: dist/*.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
