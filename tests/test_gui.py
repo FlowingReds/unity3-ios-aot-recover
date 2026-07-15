@@ -1,6 +1,6 @@
 import unittest
 
-from aot_recover.gui_server import build_args
+from aot_recover.gui import build_args
 
 
 class BuildArgsTest(unittest.TestCase):

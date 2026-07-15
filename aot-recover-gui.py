@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-from aot_recover.gui_server import main
+from aot_recover.gui import main
 
 
 if __name__ == "__main__":

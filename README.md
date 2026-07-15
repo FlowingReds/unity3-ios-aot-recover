@@ -72,20 +72,20 @@ You may repeat `--reference-managed` or pass a DLL directly. These bodies are ne
 
 ## Desktop GUI
 
-If you would rather not use the terminal, run the graphical front end:
+If you would rather not use the terminal, run the native desktop front end:
 
 ```bash
 unity3-aot-recover-gui
 ```
 
-or, from a checkout, `python3 aot-recover-gui.py`. It starts a local web
-interface on `127.0.0.1` (localhost only) and opens it in your browser. Pick the
-IPA and output folder with native **Browse…** dialogs, set the same options
-available on the command line (decrypted binary, architecture, donor references,
-skip-decompile), press **Recover**, and open the output folder or `REPORT.md`
-when it finishes. Missing `.NET`/`ilspycmd` prerequisites are flagged in the
-window. The GUI uses only the Python standard library (`http.server` plus
-`tkinter` for the file dialogs); no extra packages are installed.
+or, from a checkout, `python3 aot-recover-gui.py`. It opens a normal application
+window (no browser). Pick the IPA and output folder with **Browse…** dialogs,
+set the same options available on the command line (decrypted binary,
+architecture, donor references, skip-decompile), press **Recover**, and open the
+output folder or `REPORT.md` when it finishes. Recovery runs on a worker thread
+so the window stays responsive; missing `.NET`/`ilspycmd` prerequisites are
+flagged at the top. The GUI uses only the Python standard library (`tkinter`);
+no extra packages are installed.
 
 ## Windows
 
